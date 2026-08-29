@@ -126,10 +126,36 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # OCR_PROVIDER=mock by default; use tesseract after brew install
+alembic upgrade head   # create the database from migrations
 uvicorn app.main:app --reload
 ```
 
 API runs at **http://localhost:8000** — try **http://localhost:8000/health**
+
+#### Database (Phase 2 schema)
+
+Alembic migrations live in `backend/alembic/versions/`. A fresh clone should always run `alembic upgrade head` before starting the server.
+
+| Table | Purpose |
+|-------|---------|
+| `events` | Tournaments (name, location, section, dates) |
+| `players` | White/black player names and optional rating IDs |
+| `games` | Game metadata, `event_id` FK, and verified `pgn` text |
+| `game_moves` | Parsed/corrected moves per ply |
+| `scoresheet_uploads` | Uploaded image path + OCR status/raw JSON |
+
+**Not in Phase 2:** `users` and per-account isolation — planned for Phase 3 (ticket 3.1). Auth is local-dev only until then.
+
+For PostgreSQL (staging/production), set `DATABASE_URL` in `.env` to the `postgresql+asyncpg://…` URL from `.env.example`, then run `alembic upgrade head` against that database.
+
+To run the optional local Postgres migration test (requires a running Postgres instance):
+
+```bash
+RUN_POSTGRES_MIGRATION_TEST=1 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive \
+  pytest tests/test_migrations.py::test_migrations_upgrade_downgrade_roundtrip_postgres -v
+```
+
+CI runs this automatically in the `migrations-postgres` job on every pull request.
 
 **OCR spike (local):** set `OCR_PROVIDER=tesseract` in `backend/.env`, then:
 

@@ -36,7 +36,100 @@ jobs:
         # exit-zero treats all errors as warnings. (You can remove this later to strictly enforce code style!)
         flake8 backend --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-    #7. Runs the Tests (Looks for a folder named 'tests' or files named 'test_*.py')
+    #7. Apply database migrations, verify drift, then run tests
+    - name: Run database migrations
+      working-directory: backend
+      run: alembic upgrade head
+
+    - name: Verify models match migrations
+      working-directory: backend
+      run: alembic check
+
     - name: Run tests with pytest
       working-directory: backend
       run: pytest
+
+  migrations-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chess_archive
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: pip install -r backend/requirements.txt
+
+    - name: Wait for Postgres
+      working-directory: backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive
+      run: |
+        python - <<'PY'
+        import asyncio
+        import sys
+        import time
+
+        import asyncpg
+
+        async def wait():
+            for _ in range(30):
+                try:
+                    conn = await asyncpg.connect(
+                        "postgresql://postgres:postgres@localhost:5432/chess_archive"
+                    )
+                    await conn.close()
+                    return
+                except Exception:
+                    time.sleep(1)
+            print("Postgres did not become ready in time", file=sys.stderr)
+            sys.exit(1)
+
+        asyncio.run(wait())
+        PY
+
+    - name: Alembic upgrade head
+      working-directory: backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive
+      run: alembic upgrade head
+
+    - name: Alembic check
+      working-directory: backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive
+      run: alembic check
+
+    - name: Alembic downgrade and re-upgrade
+      working-directory: backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive
+      run: |
+        alembic downgrade base
+        alembic upgrade head
+
+    - name: Postgres migration pytest
+      working-directory: backend
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chess_archive
+        RUN_POSTGRES_MIGRATION_TEST: "1"
+      run: pytest tests/test_migrations.py::test_migrations_upgrade_downgrade_roundtrip_postgres -v

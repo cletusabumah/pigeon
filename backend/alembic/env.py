@@ -1,10 +1,9 @@
-import asyncio
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
 from app.database import Base
@@ -19,11 +18,44 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
+def _migration_url() -> str:
+    """Alembic runs synchronously — translate async app URLs to sync drivers."""
+    url = settings.database_url
+    if url.startswith("postgresql+asyncpg"):
+        return url.replace("postgresql+asyncpg", "postgresql+psycopg2", 1)
+    if url.startswith("sqlite+aiosqlite"):
+        return url.replace("sqlite+aiosqlite", "sqlite", 1)
+    return url
+
+
+def _compare_type(context, inspected_column, metadata_column, inspected_type, metadata_type):
+    if context.dialect.name == "sqlite":
+        if isinstance(inspected_type, sa.CHAR) and isinstance(metadata_type, sa.Uuid):
+            return False
+    if context.dialect.name == "postgresql":
+        if metadata_column.name == "ocr_raw_json":
+            if type(inspected_type).__name__ in {"JSON", "JSONB"}:
+                return False
+        inspected_enum = getattr(inspected_type, "name", None)
+        metadata_enum = getattr(metadata_type, "name", None)
+        if inspected_enum and metadata_enum and inspected_enum == metadata_enum:
+            return False
+    return None
+
+
+def _configure_context(**kwargs):
+    return context.configure(
         target_metadata=target_metadata,
+        compare_type=_compare_type,
+        compare_server_default=False,
+        **kwargs,
+    )
+
+
+def run_migrations_offline() -> None:
+    url = _migration_url()
+    _configure_context(
+        url=url,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -33,27 +65,19 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    _configure_context(connection=connection)
 
     with context.begin_transaction():
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-
-    await connectable.dispose()
-
-
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    connectable = create_engine(_migration_url(), poolclass=pool.NullPool)
+
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
+
+    connectable.dispose()
 
 
 if context.is_offline_mode():

@@ -73,9 +73,9 @@
       "id": "schema-migrations",
       "title": "Review Phase 2 schema + migrations clean on fresh clone (ticket 2.1)",
       "owner": "cletus",
-      "done": false,
-      "completed_at": null,
-      "completed_by": null
+      "done": true,
+      "completed_at": "2026-07-14T03:13:54.994760+00:00",
+      "completed_by": "cletus"
     }
   ]
 }
